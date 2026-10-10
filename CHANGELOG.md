@@ -58,3 +58,8 @@ against the installed bhyve, and each one shaped the API:
   booted" and exits 4 — leaving the VM behind.
 
 [Unreleased]: https://github.com/zombocoder/go-freebsd-bhyve/commits/main
+
+### Changed
+
+- Depend on the published `github.com/zombocoder/go-freebsd-vmm v1.0.0` instead
+  of a local `replace` directive. The module is now `go get`-able.

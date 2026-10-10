@@ -2,7 +2,7 @@
 
 Run and supervise FreeBSD virtual machines from Go.
 
-This is the layer above [go-freebsd-vmm](../go-freebsd-vmm), which binds `vmm(4)`
+This is the layer above [go-freebsd-vmm](https://github.com/zombocoder/go-freebsd-vmm), which binds `vmm(4)`
 through `libvmmapi`. That library can inspect and control a virtual machine but
 cannot boot one, because device emulation lives in bhyve's userspace process.
 This package supplies the missing half: it describes a VM, runs `bhyve(8)` to
@@ -133,6 +133,12 @@ fails at `Start` — and it **cannot** catch a misspelled variable name, since
 bhyve stores every name it is given so that values can refer to each other. A
 typo therefore comes back in the dump looking healthy. `Check` covers what can
 be decided locally; the rest is only knowable by running.
+
+## Installation
+
+```sh
+go get github.com/zombocoder/go-freebsd-bhyve
+```
 
 ## Requirements
 
