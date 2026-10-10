@@ -1,5 +1,10 @@
 # go-freebsd-bhyve
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/zombocoder/go-freebsd-bhyve.svg)](https://pkg.go.dev/github.com/zombocoder/go-freebsd-bhyve)
+[![FreeBSD](https://img.shields.io/badge/platform-FreeBSD-red.svg)](https://www.freebsd.org/)
+[![Go Version](https://img.shields.io/badge/go-%3E%3D1.22-blue.svg)](https://golang.org/)
+[![License](https://img.shields.io/badge/license-BSD--2--Clause-green.svg)](LICENSE)
+
 Run and supervise FreeBSD virtual machines from Go.
 
 This is the layer above [go-freebsd-vmm](https://github.com/zombocoder/go-freebsd-vmm), which binds `vmm(4)`
