@@ -1,7 +1,10 @@
 # go-freebsd-bhyve
 
+[![CI](https://github.com/zombocoder/go-freebsd-bhyve/actions/workflows/ci.yml/badge.svg)](https://github.com/zombocoder/go-freebsd-bhyve/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/zombocoder/go-freebsd-bhyve.svg)](https://pkg.go.dev/github.com/zombocoder/go-freebsd-bhyve)
-[![FreeBSD](https://img.shields.io/badge/platform-FreeBSD-red.svg)](https://www.freebsd.org/)
+[![Go Report Card](https://goreportcard.com/badge/github.com/zombocoder/go-freebsd-bhyve)](https://goreportcard.com/report/github.com/zombocoder/go-freebsd-bhyve)
+[![Release](https://img.shields.io/github/v/release/zombocoder/go-freebsd-bhyve?sort=semver)](https://github.com/zombocoder/go-freebsd-bhyve/releases)
+[![FreeBSD](https://img.shields.io/badge/FreeBSD-14%20%7C%2015-red.svg)](https://www.freebsd.org/)
 [![Go Version](https://img.shields.io/badge/go-%3E%3D1.22-blue.svg)](https://golang.org/)
 [![License](https://img.shields.io/badge/license-BSD--2--Clause-green.svg)](LICENSE)
 
@@ -139,6 +142,22 @@ bhyve stores every name it is given so that values can refer to each other. A
 typo therefore comes back in the dump looking healthy. `Check` covers what can
 be decided locally; the rest is only knowable by running.
 
+## Examples
+
+Five runnable programs live under [`examples/`](examples/README.md):
+
+| Example | What it shows |
+| --- | --- |
+| `render` | a `Config`, its rendered file, its PCI layout, and bhyve's own view of it; no privilege |
+| `run` | booting a VM, Ctrl-C as an ACPI power button, decoding the exit, destroying the VM |
+| `supervise` | a restart policy owned by the caller: restart on reboot, stop on power off, back off on failure |
+| `inspect` | bhyve running a VM while go-freebsd-vmm reads its registers and exit counters |
+| `cleanup` | finding and destroying VMs that bhyve left in the kernel |
+
+```sh
+go run ./examples/render -name db01 -cpus 4 -mem 8G
+```
+
 ## Installation
 
 ```sh
@@ -147,10 +166,10 @@ go get github.com/zombocoder/go-freebsd-bhyve
 
 ## Requirements
 
-- FreeBSD with `vmm(4)` and `bhyve(8)`
+- FreeBSD 14 or 15 with `vmm(4)` and `bhyve(8)`
 - Go 1.22 or newer
 - root, to run a VM
-- UEFI firmware from the ports tree (`sysutils/edk2`) for a guest that boots
+- UEFI firmware for a guest that boots: `pkg install edk2-bhyve`
 
 ## Testing
 
@@ -158,6 +177,7 @@ go get github.com/zombocoder/go-freebsd-bhyve
 make test         # level 1: no privilege, no VM; needs bhyve(8) installed
 make race         # the same, under the race detector
 make lint         # go vet and staticcheck
+make check        # formatting, vet and level 1: run before a PR
 make integration  # level 2: real bhyve processes; needs root
 ```
 
@@ -169,6 +189,14 @@ Level 2 starts real VMs. Every test destroys what it created, including when it
 fails, and each package sweeps leftover `/dev/vmm/gobhyve-test-*` objects before
 and after the run. Tests that need a VM to stay running also need UEFI
 firmware, and skip with that reason when it is missing.
+
+Both levels are green on FreeBSD 15.1 amd64 with `edk2-bhyve` installed. CI
+runs level 1 on FreeBSD 14.5 and 15.1, and level 2 on runners that can execute
+a nested guest; see [CONTRIBUTING.md](CONTRIBUTING.md#continuous-integration).
+
+The boot ROM is one place the releases differ: bhyve 14 reads `lpc.bootrom`,
+bhyve 15 reads `bootrom` and warns about the old name. The renderer writes
+both, so the same configuration file works on either.
 
 ## Status
 
@@ -188,9 +216,17 @@ Not implemented yet, in rough order of usefulness:
 - **Save and restore.** Through `bhyve -r`. Gated on a kernel built with
   `BHYVE_SNAPSHOT`, which is not the default; there is no live migration in
   bhyve at all.
-- **A guest that actually boots, in CI.** Everything above the configuration
-  layer is exercised against real bhyve processes, but no guest has been booted
-  by these tests, because the development host has no firmware installed.
+- **A guest operating system that boots, in the tests.** The tests that need a
+  live VM run UEFI firmware, which sits at its boot menu; no operating system
+  is booted, so ACPI shutdown (`Stop` as a power button press) is untested.
+
+## Contributing
+
+Contributions are welcome -- see [CONTRIBUTING.md](CONTRIBUTING.md) for how to
+run the tests, what CI checks, and where help is wanted. Please follow the
+[Code of Conduct](CODE_OF_CONDUCT.md) and report security issues privately as
+described in [SECURITY.md](SECURITY.md). [CHANGELOG.md](CHANGELOG.md) has the
+release history.
 
 ## License
 

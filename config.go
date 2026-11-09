@@ -34,6 +34,15 @@ const (
 	keyVMExitOnPause     = "x86.vmexit_on_pause"
 	keyConfigDump        = "config.dump"
 
+	// The boot ROM moved in FreeBSD 15. bhyve 14 reads only
+	// lpc.bootrom and lpc.bootvars. bhyve 15 reads bootrom and
+	// bootvars at the top level, and copies the lpc.* names across
+	// with a deprecation warning only when the new ones are unset.
+	// Both pairs are written, so one rendered file boots on either
+	// release without asking which one is installed: each release
+	// stores the pair it does not use and never reads it.
+	keyBootROM     = "bootrom"
+	keyBootVars    = "bootvars"
 	keyLPCBootROM  = "lpc.bootrom"
 	keyLPCBootVars = "lpc.bootvars"
 )
@@ -59,8 +68,10 @@ type Config struct {
 	Memory Memory
 
 	// Firmware is the boot ROM to run. A VM without one has nothing
-	// to execute: bhyve reports "virtual machine cannot be booted"
-	// and exits.
+	// to execute, and bhyve exits with status 4: FreeBSD 14 creates
+	// the VM first and reports "virtual machine cannot be booted",
+	// FreeBSD 15 reports "no bootrom was configured" without creating
+	// it.
 	Firmware *Firmware
 
 	Disks    []Disk

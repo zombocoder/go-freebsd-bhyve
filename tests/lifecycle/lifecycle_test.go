@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -28,14 +29,18 @@ func ctx(t *testing.T) context.Context {
 	return c
 }
 
-// TestUnbootableVM is the lifecycle end to end on a host without
-// firmware: bhyve accepts the configuration, creates the virtual
-// machine, finds nothing to boot, and exits.
+// TestUnbootableVM is the lifecycle end to end for a VM with no
+// firmware: bhyve accepts the configuration, finds nothing to boot, and
+// exits with status 4.
 //
 // It is a real test despite the guest never running, because it covers
-// the parts that are hard: launching, detecting that the VM reached the
-// kernel, decoding the exit, and cleaning up the VM that bhyve left
-// behind.
+// the parts that are hard: launching, detecting whether the VM reached
+// the kernel, decoding the exit, and cleaning up.
+//
+// Releases differ in the middle. bhyve 14 creates the VM before it
+// notices there is nothing to boot, and leaves it behind. bhyve 15
+// checks first and exits without creating anything. Either is fine;
+// what must hold is that Started agrees with what is in the kernel.
 func TestUnbootableVM(t *testing.T) {
 	cfg := harness.Config(t)
 	vm := harness.RequireVM(t, cfg)
@@ -54,11 +59,6 @@ func TestUnbootableVM(t *testing.T) {
 		t.Fatalf("Wait: %v", waitErr)
 	}
 
-	// bhyve creates the VM before discovering it cannot boot it, so
-	// the VM did reach the kernel.
-	if !reason.Started {
-		t.Error("Started = false, but bhyve got far enough to create the VM")
-	}
 	if reason.Kind != bhyve.ExitBhyveError {
 		t.Errorf("Kind = %v, want bhyve error", reason.Kind)
 	}
@@ -76,10 +76,16 @@ func TestUnbootableVM(t *testing.T) {
 		t.Errorf("State() = %v, want exited", got)
 	}
 
-	// The VM outlives the process. This is the thing that surprises
-	// people and the reason Destroy exists.
-	if !vm.Exists() {
-		t.Error("the VM is gone after bhyve exited; it should have been left behind")
+	// Started is taken from the device node, so it has to agree with
+	// it. A VM that reached the kernel outlives the process, which is
+	// the reason Destroy exists.
+	if exists := vm.Exists(); exists != reason.Started {
+		t.Errorf("Started = %v but the VM exists = %v", reason.Started, exists)
+	}
+	if reason.Started {
+		t.Log("bhyve created the VM before finding nothing to boot (FreeBSD 14)")
+	} else {
+		t.Log("bhyve refused before creating the VM (FreeBSD 15)")
 	}
 }
 
@@ -117,10 +123,17 @@ func TestStartIsDeterministic(t *testing.T) {
 
 // TestDestroyReleasesTheName covers the consequence of bhyve leaving the
 // VM behind: until it is destroyed, the name is taken.
+//
+// The leftover comes from killing a running VM. bhyve cannot clean up
+// after SIGKILL on any release, which makes this the reliable way to get
+// one; an unbootable VM leaves one behind only on FreeBSD 14.
 func TestDestroyReleasesTheName(t *testing.T) {
 	harness.RequireHost(t)
+	rom := harness.FirmwarePath(t)
 
 	cfg := harness.Config(t)
+	cfg.Firmware = &bhyve.Firmware{ROM: rom}
+	cfg.Framebuffer = &bhyve.Framebuffer{Port: 15904}
 
 	first, err := bhyve.New(cfg, bhyve.WithDir(t.TempDir()))
 	if err != nil {
@@ -128,13 +141,18 @@ func TestDestroyReleasesTheName(t *testing.T) {
 	}
 	t.Cleanup(func() { first.Destroy() })
 
-	// Run once, leaving the VM in the kernel.
-	_ = first.Start(ctx(t))
+	// Run once and kill it, leaving the VM in the kernel.
+	if err := first.Start(ctx(t)); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if err := first.Kill(); err != nil {
+		t.Fatalf("Kill: %v", err)
+	}
 	if _, err := first.Wait(ctx(t)); err != nil {
 		t.Fatalf("Wait: %v", err)
 	}
 	if !first.Exists() {
-		t.Skip("bhyve did not leave the VM behind on this host")
+		t.Fatal("the VM is gone after bhyve was killed; it should have been left behind")
 	}
 
 	// A second VM of the same name refuses to start rather than
@@ -156,16 +174,18 @@ func TestDestroyReleasesTheName(t *testing.T) {
 		t.Fatal("the VM still exists after Destroy")
 	}
 
+	// With the name free, a new VM under it starts normally.
 	third, err := bhyve.New(cfg, bhyve.WithDir(t.TempDir()))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	t.Cleanup(func() { third.Destroy() })
-
-	// It gets as far as bhyve again, which is all this is checking.
-	_ = third.Start(ctx(t))
-	if _, err := third.Wait(ctx(t)); err != nil {
-		t.Errorf("Wait after reusing the name: %v", err)
+	t.Cleanup(func() {
+		third.Kill()
+		third.Wait(ctx(t))
+		third.Destroy()
+	})
+	if err := third.Start(ctx(t)); err != nil {
+		t.Errorf("Start after Destroy freed the name: %v", err)
 	}
 }
 
@@ -210,6 +230,12 @@ func TestKillStopsARunningVM(t *testing.T) {
 	}
 	if reason.Signal == 0 {
 		t.Error("Signal = 0 for a killed process")
+	}
+	// The rendered configuration must suit the installed bhyve
+	// without complaint. FreeBSD 15 warns here if only the old
+	// lpc.bootrom name is given.
+	if strings.Contains(reason.Message, "deprecated") {
+		t.Errorf("bhyve complained about the configuration: %s", reason.Message)
 	}
 	t.Logf("exit reason: %v", reason)
 

@@ -1,0 +1,39 @@
+name: Feature request
+description: Suggest a bhyve option, device or lifecycle operation to support
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This library describes and runs bhyve VMs. Provisioning the resources a VM
+        uses -- ZFS volumes, disk images, tap(4) interfaces, bridges, firewall rules --
+        is out of scope; those belong to go-freebsd-libzfs, go-freebsd-ifc and go-freebsd-pf.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What do you want to do?
+      description: The task you are trying to accomplish and why the current API does not cover it.
+    validations:
+      required: true
+
+  - type: textarea
+    id: bhyve
+    attributes:
+      label: Equivalent bhyve option
+      description: The `bhyve(8)` flag or `bhyve_config(5)` variable this corresponds to, and on which FreeBSD releases it exists.
+      render: shell
+
+  - type: textarea
+    id: api
+    attributes:
+      label: Proposed API
+      description: How would you like to express it in Go? Rough sketches are fine.
+      render: go
+
+  - type: checkboxes
+    id: contribute
+    attributes:
+      label: Contribution
+      options:
+        - label: I would like to implement this myself

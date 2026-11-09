@@ -189,8 +189,11 @@ func (c *Config) build(extra map[string]string) (*variables, error) {
 	v.node(pciPrefix(a.lpc), keyDevice, modelLPC)
 
 	if c.Firmware != nil {
+		// Both names, for FreeBSD 14 and 15; see keyBootROM.
+		v.set(keyBootROM, c.Firmware.ROM)
 		v.set(keyLPCBootROM, c.Firmware.ROM)
 		if c.Firmware.Vars != "" {
+			v.set(keyBootVars, c.Firmware.Vars)
 			v.set(keyLPCBootVars, c.Firmware.Vars)
 		}
 	}

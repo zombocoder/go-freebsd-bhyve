@@ -5,6 +5,11 @@
 
 GO?=	go
 
+# Every suite finishes in seconds. A test binary still running after
+# this is hung, and go test then fails it with every goroutine's stack,
+# which names the test that stopped.
+TEST_TIMEOUT?=	5m
+
 all: build
 
 build:
@@ -14,16 +19,26 @@ build:
 # checked against bhyve's own parser rather than against a copy of its
 # rules. Needs no privilege and starts no VM.
 test:
-	$(GO) test ./...
+	$(GO) test -timeout $(TEST_TIMEOUT) ./...
 
 race:
-	$(GO) test -race ./...
+	$(GO) test -timeout $(TEST_TIMEOUT) -race ./...
 
 vet:
 	$(GO) vet ./...
 
 fmt:
 	$(GO) fmt ./...
+
+# Fail, listing the files, if anything is not gofmt-clean.
+fmt-check:
+	@unformatted=$$(gofmt -l .); \
+	if [ -n "$$unformatted" ]; then \
+	    echo "not gofmt-clean:"; echo "$$unformatted"; exit 1; \
+	fi
+
+# What to run before sending a change: no root needed.
+check: fmt-check vet test
 
 lint: vet
 	@command -v staticcheck >/dev/null 2>&1 && staticcheck ./... || \
@@ -36,9 +51,9 @@ integration:
 	$(GO) test -c -o /tmp/gobhyve-lifecycle.test ./tests/lifecycle/
 	@echo "running as root; this starts and stops real VMs"
 	@if command -v doas >/dev/null 2>&1; then \
-	    doas /tmp/gobhyve-lifecycle.test -test.v; \
+	    doas /tmp/gobhyve-lifecycle.test -test.v -test.timeout $(TEST_TIMEOUT); \
 	else \
-	    sudo /tmp/gobhyve-lifecycle.test -test.v; \
+	    sudo /tmp/gobhyve-lifecycle.test -test.v -test.timeout $(TEST_TIMEOUT); \
 	fi
 	rm -f /tmp/gobhyve-lifecycle.test
 
@@ -46,4 +61,4 @@ clean:
 	rm -f /tmp/gobhyve-lifecycle.test
 	$(GO) clean ./...
 
-.PHONY: all build test race integration vet fmt lint clean
+.PHONY: all build test race integration vet fmt fmt-check check lint clean

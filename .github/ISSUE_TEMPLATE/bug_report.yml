@@ -1,0 +1,84 @@
+name: Bug report
+description: Something in the library does not work as expected
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! Please check existing issues first.
+        For security problems, use [private reporting](https://github.com/zombocoder/go-freebsd-bhyve/security/advisories/new) instead.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Minimal reproduction
+      description: A small Go program, or the `Config` and the calls you made.
+      render: go
+    validations:
+      required: true
+
+  - type: textarea
+    id: rendered
+    attributes:
+      label: Rendered configuration
+      description: |
+        Output of `cfg.Render()`. If the same file works or fails with `bhyve -k <file> <name>` run by hand,
+        say which: it tells library bugs from bhyve behaviour. Remove anything you consider private.
+      render: ini
+
+  - type: textarea
+    id: output
+    attributes:
+      label: Exit reason and error messages
+      description: The `ExitReason` (its `String()` keeps bhyve's own message), returned errors, and if useful `dmesg | grep -i vmm`.
+      render: shell
+
+  - type: input
+    id: freebsd
+    attributes:
+      label: FreeBSD version
+      description: Output of `freebsd-version -ku`. bhyve's behaviour differs between 14 and 15.
+      placeholder: "15.1-RELEASE-p6 15.1-RELEASE-p6"
+    validations:
+      required: true
+
+  - type: input
+    id: firmware
+    attributes:
+      label: Firmware
+      description: Package and version of the boot ROM, e.g. from `pkg info edk2-bhyve`, or "none".
+      placeholder: "edk2-bhyve-g202508_3"
+
+  - type: input
+    id: go
+    attributes:
+      label: Go version
+      description: Output of `go version`
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Library version
+      description: Module version or commit hash you are using
+    validations:
+      required: true
+
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Where does it run?
+      options:
+        - bare metal
+        - nested (FreeBSD inside another hypervisor)
+    validations:
+      required: true

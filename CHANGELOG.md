@@ -10,6 +10,49 @@ The API may change until v1.0.0.
 
 ### Added
 
+- CI on GitHub Actions: formatting and `go mod tidy` on Linux; build, vet
+  and level 1 on FreeBSD 14.5 and 15.1 VMs, with level 1 run unprivileged;
+  level 2 with UEFI firmware where the runner can execute a guest (nested
+  AMD-V). Each run fails if a VM or a bhyve process is left behind.
+- `make check`, and `-timeout $(TEST_TIMEOUT)` (5m) on every `go test`.
+- Examples: `render`, `run`, `supervise`, `inspect` (with go-freebsd-vmm)
+  and `cleanup`, each run against FreeBSD 15.1 before being added.
+- Community files: Code of Conduct, security policy, issue and pull request
+  templates, Dependabot for the workflow actions and go-freebsd-vmm, and an
+  expanded CONTRIBUTING with where help is wanted.
+
+### Fixed
+
+- **Builds on FreeBSD 15.** Requires go-freebsd-vmm v1.1.0; v1.0.0 did not
+  compile against FreeBSD 15's headers.
+- **Boot ROM on FreeBSD 15.** bhyve 15 reads the firmware from `bootrom`
+  and `bootvars` and only falls back to `lpc.bootrom` / `lpc.bootvars`
+  with a deprecation warning; bhyve 14 reads only the `lpc.` names. Both
+  pairs are now rendered, so one configuration file works on either
+  release without the warning. `Config.Extra` cannot override either.
+- **Lifecycle tests on FreeBSD 15.** Without a boot ROM, bhyve 15 exits
+  with "no bootrom was configured" before creating the VM, where bhyve 14
+  created it and left it behind. `TestUnbootableVM` now accepts both and
+  checks that `ExitReason.Started` agrees with the kernel.
+  `TestDestroyReleasesTheName` gets its leftover VM by killing a running
+  one, which works on both releases, instead of skipping on 15.
+
+### Verified
+
+- Levels 1 and 2 on FreeBSD 15.1-RELEASE amd64 (AMD Ryzen 7 5700G) with
+  `edk2-bhyve` installed, so the tests that need a live VM ran rather than
+  skipped.
+
+## [1.0.2] - 2026-10-16
+
+### Added
+
+- A non-FreeBSD stub so pkg.go.dev can render the package documentation.
+
+## [1.0.0] - 2026-10-10
+
+### Added
+
 - **Configuration model.** `Config` with `CPU`, `Memory`, `Firmware`, `Disk`,
   `Network`, `Serial`, `Framebuffer` and passthrough devices, rendering to a
   `bhyve_config(5)` file. Variable names are compile-time constants.
@@ -57,7 +100,9 @@ against the installed bhyve, and each one shaped the API:
 - Without a boot ROM, bhyve creates the VM, reports "virtual machine cannot be
   booted" and exits 4 — leaving the VM behind.
 
-[Unreleased]: https://github.com/zombocoder/go-freebsd-bhyve/commits/main
+[Unreleased]: https://github.com/zombocoder/go-freebsd-bhyve/compare/v1.0.2...HEAD
+[1.0.2]: https://github.com/zombocoder/go-freebsd-bhyve/compare/v1.0.0...v1.0.2
+[1.0.0]: https://github.com/zombocoder/go-freebsd-bhyve/releases/tag/v1.0.0
 
 ### Changed
 

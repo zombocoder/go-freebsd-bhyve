@@ -1,0 +1,124 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+
+      - name: Check formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::These files are not gofmt-formatted (run 'gofmt -w .'):"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Check go.mod is tidy
+        run: go mod tidy -diff
+
+  freebsd:
+    # The package builds only on FreeBSD and checks its configuration
+    # layer against the installed bhyve(8), so everything after formatting
+    # runs inside a FreeBSD VM under QEMU on the Linux runner.
+    #
+    # Level 1 asks bhyve to parse configurations (config.dump), which needs
+    # neither privilege nor vmm(4), and always runs. Level 2 starts real
+    # bhyve processes, several of them running UEFI firmware; it needs
+    # vmm(4), so nested virtualization on the runner, and runs only where
+    # guest execution is known to work (see below).
+    name: FreeBSD ${{ matrix.release }}
+    runs-on: ubuntu-latest
+    # A normal run takes about two minutes. The test commands carry their
+    # own, shorter timeouts so a hung test is reported with stacks; this
+    # one catches the VM itself hanging.
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # 14.x reads the boot ROM from lpc.bootrom and leaves an unbootable
+        # VM behind; 15.x reads bootrom and does not. Both are covered.
+        release: ["14.5", "15.1"]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build and test in FreeBSD VM
+        uses: vmactions/freebsd-vm@v1.5.9
+        with:
+          release: ${{ matrix.release }}
+          copyback: false
+          cache-after-prepare: true
+          prepare: |
+            ASSUME_ALWAYS_YES=yes pkg install -y go edk2-bhyve
+          run: |
+            set -e
+            export GOFLAGS=-buildvcs=false
+            freebsd-version -ku
+            go version
+            sysctl -n hw.model
+
+            go vet ./...
+            go build ./...
+
+            # Two layers of timeout. go test -timeout fails a hung test
+            # binary and prints every goroutine's stack, which names the
+            # test that stopped. timeout(1) is the backstop for a process
+            # stuck in the kernel that the first cannot stop.
+            gotest() {
+              timeout -k 30s 6m go test -count=1 -timeout 4m "$@"
+            }
+
+            # Level 1, as an ordinary user would run it: no privilege.
+            pw useradd -n ci -m 2>/dev/null || true
+            chown -R ci .
+            su -m ci -c 'HOME=/home/ci go test -count=1 -timeout 4m -v .'
+            gotest -race .
+
+            # Level 2 runs UEFI firmware in a guest. Under nested VT-x on
+            # the Intel runners guest execution takes the whole FreeBSD VM
+            # down (seen in go-freebsd-vmm's CI), so there is nothing a
+            # test timeout could report. Nested AMD-V works. Runners are
+            # Intel or AMD at random, so decide per run.
+            model=$(sysctl -n hw.model)
+            case "$(sysctl -n kern.vm_guest):$model" in
+            none:* | *:*AMD*)
+              if kldload -n vmm; then
+                gotest -v ./tests/...
+              else
+                echo "::notice::level 2 skipped: vmm(4) unavailable in this VM"
+              fi
+              ;;
+            *)
+              echo "::notice::level 2 skipped: guest execution under nested VT-x hangs this VM ($model)"
+              ;;
+            esac
+
+            # Nothing may be left behind.
+            if ls /dev/vmm/gobhyve-test-* 2>/dev/null; then
+              echo "::error::tests left VMs under /dev/vmm"
+              exit 1
+            fi
+            if pgrep -q bhyve; then
+              echo "::error::tests left bhyve processes running"
+              pgrep -l bhyve
+              exit 1
+            fi

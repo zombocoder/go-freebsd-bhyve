@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/zombocoder/go-freebsd-bhyve/security/advisories/new
+    about: Please report security problems privately, not as a public issue.
+  - name: bhyve or vmm(4) bugs
+    url: https://bugs.freebsd.org/
+    about: Bugs in bhyve, its device models or the hypervisor itself belong upstream.
