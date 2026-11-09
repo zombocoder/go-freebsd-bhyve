@@ -10,6 +10,13 @@ GO?=	go
 # which names the test that stopped.
 TEST_TIMEOUT?=	5m
 
+# The race detector refuses to run with ASLR, which FreeBSD enables by
+# default: the test binary prints "This sanitizer is not compatible with
+# enabled ASLR" and exits 0, so go test reports ok without having run a
+# single test. proccontrol(1) turns ASLR off for go test and everything
+# it starts.
+RACE=	proccontrol -m aslr -s disable
+
 all: build
 
 build:
@@ -22,7 +29,7 @@ test:
 	$(GO) test -timeout $(TEST_TIMEOUT) ./...
 
 race:
-	$(GO) test -timeout $(TEST_TIMEOUT) -race ./...
+	$(RACE) $(GO) test -timeout $(TEST_TIMEOUT) -race ./...
 
 vet:
 	$(GO) vet ./...

@@ -87,11 +87,19 @@ jobs:
               timeout -k 30s 6m go test -count=1 -timeout 4m "$@"
             }
 
+            # proccontrol: the race detector refuses to run with ASLR,
+            # which FreeBSD enables by default, and its test binaries then
+            # exit 0 having run nothing, so go test reports ok.
+            gorace() {
+              proccontrol -m aslr -s disable \
+                timeout -k 30s 6m go test -count=1 -timeout 4m -race "$@"
+            }
+
             # Level 1, as an ordinary user would run it: no privilege.
             pw useradd -n ci -m 2>/dev/null || true
             chown -R ci .
             su -m ci -c 'HOME=/home/ci go test -count=1 -timeout 4m -v .'
-            gotest -race .
+            gorace .
 
             # Level 2 runs UEFI firmware in a guest. Under nested VT-x on
             # the Intel runners guest execution takes the whole FreeBSD VM

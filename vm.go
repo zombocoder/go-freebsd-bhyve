@@ -19,7 +19,8 @@ import (
 // vmmDir is where vmm(4) publishes its virtual machines.
 const vmmDir = "/dev/vmm"
 
-// runningPollInterval is how often Start looks for the VM to appear.
+// runningPollInterval is how often Start looks for the guest to start
+// executing.
 //
 // This only affects how quickly StateRunning is noticed; whether a VM
 // ran at all is decided from the device node, not from this poll, so a
@@ -174,11 +175,19 @@ func vmExists(name string) bool {
 
 // Start runs the VM and returns once it is running.
 //
-// It returns when the virtual machine has appeared in the kernel, or
-// when bhyve has exited without it appearing, whichever comes first.
-// That makes a configuration bhyve will not accept, or a guest with
-// nothing to boot, an error from Start rather than a surprise from a
-// later Wait.
+// It returns when bhyve has released the guest's boot processor, or
+// when bhyve has exited before doing so, whichever comes first. That
+// makes a configuration bhyve will not accept, a guest with nothing to
+// boot, or a device backend that cannot be opened an error from Start
+// rather than a surprise from a later Wait.
+//
+// The VM appearing under /dev/vmm is not that moment. bhyve creates the
+// VM first and only then loads the boot ROM and initialises its devices,
+// any of which can still fail; FreeBSD 14 even creates it before
+// noticing there is nothing to boot. What marks the end of startup is
+// the boot processor: bhyve activates every vCPU suspended and resumes
+// vCPU 0 as the last step before it starts serving the guest, on both
+// FreeBSD 14 and 15.
 //
 // A guest quick enough to finish before Start notices it is not an
 // error: Start succeeds and Wait reports what happened.
@@ -298,14 +307,27 @@ func (vm *VM) launch() (running, done chan struct{}, err error) {
 	return running, done, nil
 }
 
-// watch looks for the virtual machine to appear, and moves the VM to
-// StateRunning when it does.
+// watch looks for the guest to start executing, and moves the VM to
+// StateRunning when it does. See Start for why that is the boot
+// processor being resumed rather than the VM appearing.
 func (vm *VM) watch(running, done chan struct{}) {
 	ticker := time.NewTicker(runningPollInterval)
 	defer ticker.Stop()
 
+	var handle *vmm.VM
+	defer func() {
+		if handle != nil {
+			handle.Close()
+		}
+	}()
+
 	for {
-		if vmExists(vm.cfg.Name) {
+		if handle == nil && vmExists(vm.cfg.Name) {
+			// Failing to open is not fatal: the VM may be gone
+			// again already, and reap will say why.
+			handle, _ = vmm.Open(vm.cfg.Name)
+		}
+		if handle != nil && bootProcessorRunning(handle) {
 			vm.mu.Lock()
 			vm.observed = true
 			if vm.state == StateStarting {
@@ -318,14 +340,29 @@ func (vm *VM) watch(running, done chan struct{}) {
 
 		select {
 		case <-done:
-			// The process is gone and the VM never appeared
-			// while we were looking. Whether it ran at all is
-			// decided in reap, which can still see the device
-			// node bhyve left behind.
+			// The process is gone and the guest never started
+			// while we were looking. Whether the VM was created
+			// at all is decided in reap, which can still see the
+			// device node bhyve left behind.
 			return
 		case <-ticker.C:
 		}
 	}
+}
+
+// bootProcessorRunning reports whether bhyve has released vCPU 0: it is
+// active, which bhyve makes it while adding vCPUs, and no longer
+// suspended, which bhyve undoes only once all of its setup is done.
+func bootProcessorRunning(handle *vmm.VM) bool {
+	active, err := handle.ActiveCPUs()
+	if err != nil || !active.Contains(0) {
+		return false
+	}
+	suspended, err := handle.SuspendedCPUs()
+	if err != nil {
+		return false
+	}
+	return !suspended.Contains(0)
 }
 
 // reap waits for bhyve to finish and records why.

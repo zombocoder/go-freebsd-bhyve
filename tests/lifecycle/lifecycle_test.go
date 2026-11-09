@@ -121,6 +121,44 @@ func TestStartIsDeterministic(t *testing.T) {
 	t.Logf("%d runs all reported %v", runs, kinds[0])
 }
 
+// TestStartFailsWhenADeviceCannotOpen covers bhyve failing after it
+// has created the VM: the VM appears in /dev/vmm, then a device backend
+// cannot be opened and bhyve exits 4. FreeBSD 14 does the same for a VM
+// with nothing to boot.
+//
+// Start used to succeed whenever it saw the VM before bhyve exited,
+// which made the outcome depend on scheduling. It must fail every time.
+func TestStartFailsWhenADeviceCannotOpen(t *testing.T) {
+	harness.RequireHost(t)
+	rom := harness.FirmwarePath(t)
+
+	const runs = 10
+	for i := 0; i < runs; i++ {
+		cfg := harness.Config(t)
+		cfg.Firmware = &bhyve.Firmware{ROM: rom}
+		cfg.Disks = []bhyve.Disk{{Path: "/nonexistent/gobhyve-test.img"}}
+		// Wiring guest memory happens after the VM is created and
+		// before devices are opened. It takes long enough to make
+		// the window between the two certain rather than a race.
+		cfg.Memory = bhyve.Memory{Size: 1 << 30, Wired: true}
+		vm := harness.RequireVM(t, cfg)
+
+		if err := vm.Start(ctx(t)); err == nil {
+			t.Fatalf("run %d: Start succeeded although bhyve could not open the disk", i)
+		}
+		reason, err := vm.Wait(ctx(t))
+		if err != nil {
+			t.Fatalf("run %d: Wait: %v", i, err)
+		}
+		if reason.Kind != bhyve.ExitBhyveError {
+			t.Fatalf("run %d: Kind = %v, want bhyve error", i, reason.Kind)
+		}
+		if i == 0 {
+			t.Logf("exit reason: %v", reason)
+		}
+	}
+}
+
 // TestDestroyReleasesTheName covers the consequence of bhyve leaving the
 // VM behind: until it is destroyed, the name is taken.
 //

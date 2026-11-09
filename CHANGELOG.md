@@ -23,6 +23,21 @@ The API may change until v1.0.0.
 
 ### Fixed
 
+- **`Start` reported success for a VM that then failed to start.** It
+  returned as soon as the VM appeared under `/dev/vmm`, but bhyve creates
+  the VM before it loads the boot ROM and opens device backends, any of
+  which can still fail; FreeBSD 14 even creates it before noticing there is
+  nothing to boot. Whether `Start` succeeded then depended on scheduling.
+  It now waits for bhyve to resume the boot processor, which bhyve 14 and
+  15 both do as the last step of startup, read through go-freebsd-vmm.
+  `StateRunning` means the same. Covered by
+  `TestStartFailsWhenADeviceCannotOpen`, which wires guest memory to make
+  the window certain and failed on every run before the fix.
+- **The race detector never ran.** FreeBSD enables ASLR by default, and a
+  `-race` test binary then prints "This sanitizer is not compatible with
+  enabled ASLR" and exits 0, so `go test -race` reported ok without running
+  a test. `make race` and CI now run it under `proccontrol -m aslr -s
+  disable`. Run that way, it finds no races.
 - **Builds on FreeBSD 15.** Requires go-freebsd-vmm v1.1.0; v1.0.0 did not
   compile against FreeBSD 15's headers.
 - **Boot ROM on FreeBSD 15.** bhyve 15 reads the firmware from `bootrom`

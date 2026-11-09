@@ -17,14 +17,15 @@ const (
 	StateDefined State = iota
 
 	// StateStarting is a bhyve process that has been launched but
-	// whose virtual machine has not appeared yet.
+	// whose guest has not started executing yet. The VM may already
+	// exist in the kernel while bhyve is still setting it up.
 	//
 	// A VM can fail without ever leaving this state: a configuration
 	// bhyve will not accept, or a guest with nothing to boot.
 	StateStarting
 
-	// StateRunning is a VM that exists in the kernel, observed
-	// through /dev/vmm.
+	// StateRunning is a VM whose guest is executing: bhyve has
+	// finished starting up and released the boot processor.
 	StateRunning
 
 	// StateStopping is a VM that has been asked to stop and has not
