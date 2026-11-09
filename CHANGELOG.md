@@ -8,6 +8,12 @@ The API may change until v1.0.0.
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-11-09
+
+FreeBSD 15 support, a `Start` that no longer reports success for a VM that
+fails during startup, CI, examples, and the community files for outside
+contributors. The public API is unchanged.
+
 ### Added
 
 - CI on GitHub Actions: formatting and `go mod tidy` on Linux; build, vet
@@ -57,6 +63,8 @@ The API may change until v1.0.0.
 - Levels 1 and 2 on FreeBSD 15.1-RELEASE amd64 (AMD Ryzen 7 5700G) with
   `edk2-bhyve` installed, so the tests that need a live VM ran rather than
   skipped.
+- Levels 1 and 2 in CI on FreeBSD 14.5, nested on AMD EPYC, including the
+  `Start` fix; level 1 on FreeBSD 15.1.
 
 ## [1.0.2] - 2026-10-16
 
@@ -115,7 +123,8 @@ against the installed bhyve, and each one shaped the API:
 - Without a boot ROM, bhyve creates the VM, reports "virtual machine cannot be
   booted" and exits 4 — leaving the VM behind.
 
-[Unreleased]: https://github.com/zombocoder/go-freebsd-bhyve/compare/v1.0.2...HEAD
+[Unreleased]: https://github.com/zombocoder/go-freebsd-bhyve/compare/v1.0.3...HEAD
+[1.0.3]: https://github.com/zombocoder/go-freebsd-bhyve/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/zombocoder/go-freebsd-bhyve/compare/v1.0.0...v1.0.2
 [1.0.0]: https://github.com/zombocoder/go-freebsd-bhyve/releases/tag/v1.0.0
 
