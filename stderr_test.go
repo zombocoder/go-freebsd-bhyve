@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -35,17 +36,29 @@ func TestWithStderrFileSetsThePath(t *testing.T) {
 	}
 }
 
+// openTestStderr opens path as Start would and closes it when the test
+// ends.
+func openTestStderr(t *testing.T, path string) *stderrFile {
+	t.Helper()
+
+	out, err := openStderrFile(path)
+	if err != nil {
+		t.Fatalf("openStderrFile(%s): %v", path, err)
+	}
+	t.Cleanup(func() {
+		out.w.Close()
+		out.r.Close()
+	})
+	return out
+}
+
 func TestOpenStderrFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "vm.err")
 
-	file, offset, err := openStderrFile(path)
-	if err != nil {
-		t.Fatalf("openStderrFile on a new file: %v", err)
-	}
-	file.Close()
-	if offset != 0 {
-		t.Errorf("offset of a new file = %d, want 0", offset)
+	out := openTestStderr(t, path)
+	if out.offset != 0 {
+		t.Errorf("offset of a new file = %d, want 0", out.offset)
 	}
 	info, err := os.Stat(path)
 	if err != nil {
@@ -58,20 +71,19 @@ func TestOpenStderrFile(t *testing.T) {
 	if err := os.WriteFile(path, []byte("earlier run\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	file, offset, err = openStderrFile(path)
-	if err != nil {
-		t.Fatalf("openStderrFile on an existing file: %v", err)
-	}
-	if offset != int64(len("earlier run\n")) {
-		t.Errorf("offset = %d, want %d", offset, len("earlier run\n"))
+	out = openTestStderr(t, path)
+	if out.offset != int64(len("earlier run\n")) {
+		t.Errorf("offset = %d, want %d", out.offset, len("earlier run\n"))
 	}
 	// Append mode: a write lands after what is there, never over it.
-	if _, err := file.WriteString("this run\n"); err != nil {
+	if _, err := out.w.WriteString("this run\n"); err != nil {
 		t.Fatal(err)
 	}
-	file.Close()
 	if got, _ := os.ReadFile(path); string(got) != "earlier run\nthis run\n" {
 		t.Errorf("file = %q, want the earlier contents kept", got)
+	}
+	if got, err := readStderrTail(out.r, out.offset, maxStderr); err != nil || got != "this run\n" {
+		t.Errorf("read back = %q, %v; want this run's output only", got, err)
 	}
 }
 
@@ -79,7 +91,7 @@ func TestOpenStderrFileNeedsTheDirectory(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "no-such-dir")
 	path := filepath.Join(missing, "vm.err")
 
-	_, _, err := openStderrFile(path)
+	_, err := openStderrFile(path)
 	if err == nil {
 		t.Fatal("openStderrFile succeeded in a missing directory")
 	}
@@ -94,17 +106,131 @@ func TestOpenStderrFileNeedsTheDirectory(t *testing.T) {
 	}
 }
 
+// A FIFO at the path would block an open for writing until a reader
+// came along, under the VM's lock. It must be refused, promptly.
+func TestOpenStderrFileRefusesAFIFO(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "vm.err")
+	if err := syscall.Mkfifo(path, 0o600); err != nil {
+		t.Fatalf("mkfifo: %v", err)
+	}
+
+	// A reader, so that the non-blocking open itself succeeds and the
+	// type check is what refuses it.
+	reader, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		t.Fatalf("opening the FIFO for reading: %v", err)
+	}
+	defer reader.Close()
+
+	result := make(chan error, 1)
+	go func() {
+		out, err := openStderrFile(path)
+		if err == nil {
+			out.w.Close()
+			out.r.Close()
+		}
+		result <- err
+	}()
+
+	select {
+	case err := <-result:
+		if err == nil {
+			t.Fatal("openStderrFile accepted a FIFO")
+		}
+		if !strings.Contains(err.Error(), "not a regular file") {
+			t.Errorf("err = %q, want it to say the path is not a regular file", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("openStderrFile blocked on a FIFO")
+	}
+}
+
+// Without a reader, the open for writing fails rather than waits.
+func TestOpenStderrFileDoesNotWaitOnAFIFO(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "vm.err")
+	if err := syscall.Mkfifo(path, 0o600); err != nil {
+		t.Fatalf("mkfifo: %v", err)
+	}
+
+	result := make(chan error, 1)
+	go func() {
+		_, err := openStderrFile(path)
+		result <- err
+	}()
+
+	select {
+	case err := <-result:
+		if err == nil {
+			t.Fatal("openStderrFile accepted a FIFO with no reader")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("openStderrFile blocked on a FIFO with no reader")
+	}
+}
+
+func TestOpenStderrFileRefusesADevice(t *testing.T) {
+	if _, err := openStderrFile("/dev/null"); err == nil ||
+		!strings.Contains(err.Error(), "not a regular file") {
+		t.Errorf("openStderrFile(/dev/null) = %v, want it refused as not a regular file", err)
+	}
+}
+
+// newsyslog rotates by renaming. bhyve keeps writing to the renamed
+// file, and that is where its message has to be read back from, not
+// from whatever now sits at the path.
+func TestReadStderrTailFollowsARename(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "vm.err")
+	if err := os.WriteFile(path, []byte("earlier run\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	out := openTestStderr(t, path)
+	if _, err := out.w.WriteString("before rotation\n"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.Rename(path, path+".0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("a new file at the path\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// bhyve's descriptor still names the renamed inode.
+	if _, err := out.w.WriteString("after rotation\n"); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := readStderrTail(out.r, out.offset, maxStderr)
+	if err != nil {
+		t.Fatalf("readStderrTail: %v", err)
+	}
+	if got != "before rotation\nafter rotation\n" {
+		t.Errorf("read back = %q, want this run's output from the renamed file", got)
+	}
+}
+
 func TestReadStderrTail(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "vm.err")
+	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+
 	write := func(s string) {
 		t.Helper()
-		if err := os.WriteFile(path, []byte(s), 0o600); err != nil {
+		if err := file.Truncate(0); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := file.WriteAt([]byte(s), 0); err != nil {
 			t.Fatal(err)
 		}
 	}
 	read := func(offset int64, limit int) string {
 		t.Helper()
-		got, err := readStderrTail(path, offset, limit)
+		got, err := readStderrTail(file, offset, limit)
 		if err != nil {
 			t.Fatalf("readStderrTail(%d, %d): %v", offset, limit, err)
 		}
@@ -138,8 +264,13 @@ func TestReadStderrTail(t *testing.T) {
 		t.Errorf("after truncation = %q, want the whole file", got)
 	}
 
-	if _, err := readStderrTail(filepath.Join(t.TempDir(), "absent"), 0, 100); err == nil {
-		t.Error("readStderrTail on a missing file succeeded, want an error")
+	closed, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed.Close()
+	if _, err := readStderrTail(closed, 0, 100); err == nil {
+		t.Error("readStderrTail on a closed file succeeded, want an error")
 	}
 }
 
