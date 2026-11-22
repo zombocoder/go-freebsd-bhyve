@@ -188,7 +188,10 @@ func TestStderrFileOutlivesTheStarter(t *testing.T) {
 	if kind != "v" {
 		t.Fatalf("bhyve's fd 2 has type %q, want v (a file); p would be a pipe", kind)
 	}
-	if path != errPath {
+	// procstat names the file only when the kernel's name cache still
+	// holds the vnode's path; FreeBSD 14 reports "-" there. The type is
+	// what removes SIGPIPE, so the path is checked only when it is known.
+	if path != "-" && path != errPath {
 		t.Errorf("bhyve's fd 2 is %q, want %q", path, errPath)
 	}
 
