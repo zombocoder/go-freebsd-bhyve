@@ -8,6 +8,10 @@ The API may change until v1.0.0.
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-11-22
+
+SATA disks and CD-ROMs start on FreeBSD 15. The public API is unchanged.
+
 ### Fixed
 
 - SATA disks (`DiskAHCIHD`, `DiskAHCICD`) no longer stop the VM from
@@ -161,7 +165,8 @@ against the installed bhyve, and each one shaped the API:
 - Without a boot ROM, bhyve creates the VM, reports "virtual machine cannot be
   booted" and exits 4 — leaving the VM behind.
 
-[Unreleased]: https://github.com/zombocoder/go-freebsd-bhyve/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/zombocoder/go-freebsd-bhyve/compare/v1.1.1...HEAD
+[1.1.1]: https://github.com/zombocoder/go-freebsd-bhyve/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/zombocoder/go-freebsd-bhyve/compare/v1.0.3...v1.1.0
 [1.0.3]: https://github.com/zombocoder/go-freebsd-bhyve/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/zombocoder/go-freebsd-bhyve/compare/v1.0.0...v1.0.2
