@@ -8,6 +8,12 @@ The API may change until v1.0.0.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-22
+
+A supervisor can now restart without taking its guests down: bhyve's
+standard error can go to a file instead of a pipe. Existing callers are
+unaffected.
+
 ### Added
 
 - `WithStderrFile(path)` sends bhyve's standard error to a file, opened for
@@ -20,9 +26,9 @@ The API may change until v1.0.0.
   becomes `ExitReason.Message`, read through a descriptor on the inode bhyve
   writes to, so rotation by rename (newsyslog's default) or by copy and
   truncate is safe. The directory must exist, the path must be a regular
-  file, and rotating it is the caller's job. Covered by `TestStderrFileOutlivesTheStarter`, which
-  makes bhyve write to its standard error after the process that started it
-  has exited.
+  file, and rotating it is the caller's job. Covered by
+  `TestStderrFileOutlivesTheStarter`, which makes bhyve write to its
+  standard error after the process that started it has exited.
 
 ## [1.0.3] - 2026-11-09
 
@@ -139,7 +145,8 @@ against the installed bhyve, and each one shaped the API:
 - Without a boot ROM, bhyve creates the VM, reports "virtual machine cannot be
   booted" and exits 4 — leaving the VM behind.
 
-[Unreleased]: https://github.com/zombocoder/go-freebsd-bhyve/compare/v1.0.3...HEAD
+[Unreleased]: https://github.com/zombocoder/go-freebsd-bhyve/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/zombocoder/go-freebsd-bhyve/compare/v1.0.3...v1.1.0
 [1.0.3]: https://github.com/zombocoder/go-freebsd-bhyve/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/zombocoder/go-freebsd-bhyve/compare/v1.0.0...v1.0.2
 [1.0.0]: https://github.com/zombocoder/go-freebsd-bhyve/releases/tag/v1.0.0
