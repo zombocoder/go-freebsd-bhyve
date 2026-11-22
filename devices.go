@@ -15,6 +15,7 @@ const (
 	modelLPC         = "lpc"
 	modelVirtioBlk   = "virtio-blk"
 	modelVirtioNet   = "virtio-net"
+	modelAHCI        = "ahci"
 	modelAHCIHD      = "ahci-hd"
 	modelAHCICD      = "ahci-cd"
 	modelNVMe        = "nvme"
@@ -37,6 +38,25 @@ const (
 	keyFBPort   = "port"
 	keyFBWidth  = "w"
 	keyFBHeight = "h"
+)
+
+// AHCI port nodes. An ahci device carries its drives as port.N children,
+// each with a type and the usual block device variables. See
+// pci_ahci_init in usr.sbin/bhyve/pci_ahci.c and bhyve_config(5).
+//
+// The legacy model names ahci-hd and ahci-cd exist only on bhyve's
+// command line, where "-s 4,ahci-cd,/path" is rewritten into an ahci
+// device with port.0.type=cd. Written as device=ahci-cd in a
+// configuration file they are not rewritten, and FreeBSD 15 refuses
+// them outright.
+const (
+	// keyAHCIPort0 is the node of the first port. This package puts
+	// one disk in each PCI slot, so a controller only ever has one.
+	keyAHCIPort0 = "port.0"
+
+	keyAHCIPortType = "type"
+	ahciPortHD      = "hd"
+	ahciPortCD      = "cd"
 )
 
 // DiskModel is the controller a disk is attached through.
@@ -77,7 +97,24 @@ func (m DiskModel) model() (string, bool) {
 	}
 }
 
-// String renders the model as bhyve names it.
+// device returns the bhyve device model the disk is rendered as and,
+// for the AHCI models, the type of the port the disk sits on. port is
+// empty for the models that take the disk directly on the device node.
+func (m DiskModel) device() (model, port string) {
+	switch m {
+	case DiskAHCIHD:
+		return modelAHCI, ahciPortHD
+	case DiskAHCICD:
+		return modelAHCI, ahciPortCD
+	default:
+		model, _ := m.model()
+		return model, ""
+	}
+}
+
+// String renders the model as bhyve's command line names it. The AHCI
+// models use the legacy -s names, ahci-hd and ahci-cd; a configuration
+// file spells them as an ahci device with a port node instead.
 func (m DiskModel) String() string {
 	if name, ok := m.model(); ok {
 		return name

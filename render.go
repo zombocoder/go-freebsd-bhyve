@@ -232,10 +232,18 @@ func (c *Config) build(extra map[string]string) (*variables, error) {
 }
 
 // renderDisk writes one block device node.
+//
+// For AHCI the block device variables go under the controller's first
+// port rather than on the device node itself; see keyAHCIPort0.
 func (c *Config) renderDisk(v *variables, prefix string, d *Disk) {
-	model, _ := d.Model.model()
+	model, port := d.Model.device()
 
 	v.node(prefix, keyDevice, model)
+	if port != "" {
+		prefix += "." + keyAHCIPort0
+		v.node(prefix, keyAHCIPortType, port)
+	}
+
 	v.node(prefix, keyPath, d.Path)
 
 	if d.ReadOnly {

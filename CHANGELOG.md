@@ -8,6 +8,22 @@ The API may change until v1.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- SATA disks (`DiskAHCIHD`, `DiskAHCICD`) no longer stop the VM from
+  starting on FreeBSD 15. They were rendered as `device=ahci-hd` or
+  `device=ahci-cd` with the disk's `path` and options on the device node,
+  and bhyve 15 refused the configuration file with `legacy device
+  "ahci-cd", use "ahci" instead` followed by `Device emulation
+  initialization error`, exiting 4. Those names are legacy aliases that
+  only bhyve's command-line parser rewrites (`-s 4,ahci-cd,/path`); from a
+  configuration file the ahci emulation reads its drives from per-port
+  nodes. Disks are now rendered as `device=ahci` with `port.0.type` (`hd`
+  or `cd`), `port.0.path` and the block options (`ro`, `nocache`,
+  `direct`, `sectorsize`) under `port.0`, which FreeBSD 14 reads too.
+  `DiskModel.String()` still returns the command-line names. Covered by
+  `TestAHCIDisksStart`, which boots UEFI firmware with each model.
+
 ## [1.1.0] - 2026-11-22
 
 A supervisor can now restart without taking its guests down: bhyve's
