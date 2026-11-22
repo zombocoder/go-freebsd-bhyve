@@ -60,9 +60,10 @@ pci.0.0.0.device=hostbridge
 pci.0.3.0.device=virtio-blk
 pci.0.3.0.path=/dev/zvol/zroot/vm/render
 pci.0.31.0.device=lpc
-pci.0.4.0.device=ahci-cd
-pci.0.4.0.path=/tmp/install.iso
-pci.0.4.0.ro=true
+pci.0.4.0.device=ahci
+pci.0.4.0.port.0.path=/tmp/install.iso
+pci.0.4.0.port.0.ro=true
+pci.0.4.0.port.0.type=cd
 pci.0.5.0.backend=tap3
 pci.0.5.0.device=virtio-net
 pci.0.5.0.mac=58:9c:fc:00:11:22
@@ -114,6 +115,67 @@ func TestRenderPinsDestroyOnPowerOff(t *testing.T) {
 	}
 	if !strings.Contains(out, "destroy_on_poweroff=false\n") {
 		t.Error("destroy_on_poweroff is not pinned off in the rendered config")
+	}
+}
+
+// TestRenderAHCIPorts pins how SATA disks are written. A configuration
+// file must say device=ahci with the drive under port.0: the legacy
+// ahci-hd and ahci-cd names are only rewritten by bhyve's command-line
+// parser, and FreeBSD 15 refuses them in a file.
+func TestRenderAHCIPorts(t *testing.T) {
+	cfg := Config{
+		Name:   "gobhyve-ahci",
+		CPU:    CPU{Count: 1},
+		Memory: Memory{Size: 256 << 20},
+		Disks: []Disk{
+			{Path: "/tmp/disk.img", Model: DiskAHCIHD, NoCache: true, Direct: true, SectorSize: "512/4096"},
+			{Path: "/tmp/install.iso", Model: DiskAHCICD, ReadOnly: true},
+		},
+	}
+	out, err := cfg.Render()
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+
+	want := []string{
+		"pci.0.3.0.device=ahci\n",
+		"pci.0.3.0.port.0.type=hd\n",
+		"pci.0.3.0.port.0.path=/tmp/disk.img\n",
+		"pci.0.3.0.port.0.nocache=true\n",
+		"pci.0.3.0.port.0.direct=true\n",
+		"pci.0.3.0.port.0.sectorsize=512/4096\n",
+		"pci.0.4.0.device=ahci\n",
+		"pci.0.4.0.port.0.type=cd\n",
+		"pci.0.4.0.port.0.path=/tmp/install.iso\n",
+		"pci.0.4.0.port.0.ro=true\n",
+	}
+	for _, line := range want {
+		if !strings.Contains(out, line) {
+			t.Errorf("rendered config lacks %q", strings.TrimSpace(line))
+		}
+	}
+	for _, bad := range []string{"ahci-hd", "ahci-cd", "pci.0.3.0.path=", "pci.0.4.0.path=", "pci.0.4.0.ro="} {
+		if strings.Contains(out, bad) {
+			t.Errorf("rendered config contains %q, which bhyve does not read from a file", bad)
+		}
+	}
+
+	// bhyve must record every port variable as sent.
+	resolved, err := cfg.Validate(context.Background(), Tool{})
+	if errors.Is(err, ErrNotFound) {
+		t.Skip("bhyve(8) is not installed")
+	}
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	vars, err := cfg.variables()
+	if err != nil {
+		t.Fatalf("variables: %v", err)
+	}
+	for _, key := range vars.keys() {
+		if got, ok := resolved.Get(key); !ok || got != vars.pairs[key] {
+			t.Errorf("bhyve resolved %q to %q (present %v), want %q", key, got, ok, vars.pairs[key])
+		}
 	}
 }
 
