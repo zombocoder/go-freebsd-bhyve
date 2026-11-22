@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -29,9 +30,11 @@ const runningPollInterval = 5 * time.Millisecond
 
 // maxStderr bounds how much of bhyve's standard error is kept.
 //
-// bhyve explains a startup failure in its first line or two, so keeping
-// the beginning is enough; the cap stops a guest wired to stdio from
-// filling memory with console output.
+// Through the default pipe, the head is kept: bhyve explains a startup
+// failure in its first line or two, and the cap stops a guest wired to
+// stdio from filling memory with console output. Read back from a
+// WithStderrFile file, the tail is kept instead, because the file may
+// hold a long run's warnings and bhyve's reason for exiting comes last.
 const maxStderr = 8 << 10
 
 // Option configures a VM.
@@ -50,6 +53,42 @@ func WithTool(t Tool) Option {
 // inspected after a failure.
 func WithDir(dir string) Option {
 	return func(vm *VM) { vm.dir = dir }
+}
+
+// WithStderrFile sends bhyve's standard error to the file at path
+// instead of to a pipe read by this process.
+//
+// By default Start collects bhyve's standard error through a pipe, so
+// that a startup failure can be reported in bhyve's own words. The read
+// end of that pipe belongs to the calling process. bhyve runs in its own
+// process group and can outlive its caller, which is what lets a
+// supervising daemon restart without taking its guests down; but once
+// the caller has exited, the next thing bhyve writes to standard error,
+// an unhandled MSR warning or a device model complaining, gets SIGPIPE
+// or EPIPE and can kill the guest. A caller that needs guests to survive
+// its own restart should use this option.
+//
+// The file is opened for appending, created with mode 0600 if it does
+// not exist, and handed to bhyve as its file descriptor 2 directly: no
+// pipe and no copying goroutine. Its directory must already exist.
+// The path must name a regular file, or nothing yet; a FIFO or a device
+// is refused, since either could block or swallow bhyve's output. Start
+// closes this process's write descriptor as soon as bhyve has been
+// started. An empty path means the default pipe.
+//
+// Error messages are unaffected. Start notes the file's size before
+// running bhyve, and when bhyve exits, whatever it appended since then
+// (at most the last 8 KiB) becomes ExitReason.Message.
+//
+// The file only grows; rotating it is the caller's job, and both usual
+// ways are safe. With rotation by rename, newsyslog's default, bhyve
+// keeps writing to the renamed file until it is restarted, and the
+// message is read back from that same file: Start keeps a read
+// descriptor on it rather than reopening the path. With copy and
+// truncate, bhyve's next write lands at the new end, because it writes
+// in append mode.
+func WithStderrFile(path string) Option {
+	return func(vm *VM) { vm.stderrPath = path }
 }
 
 // VM is a virtual machine described by a configuration and, while it
@@ -88,15 +127,15 @@ func WithDir(dir string) Option {
 // Methods are safe to call concurrently. Wait may be called from
 // several goroutines; they all see the same reason.
 type VM struct {
-	cfg  Config
-	tool Tool
-	dir  string
+	cfg        Config
+	tool       Tool
+	dir        string
+	stderrPath string
 
 	mu       sync.Mutex
 	state    State
 	cmd      *exec.Cmd
 	confPath string
-	stderr   *boundedBuffer
 
 	// observed records that the virtual machine was seen in
 	// /dev/vmm. See the note in reap about why this is not the only
@@ -275,15 +314,46 @@ func (vm *VM) launch() (running, done chan struct{}, err error) {
 		return nil, nil, newError(op, vm.cfg.Name, err)
 	}
 
-	stderr := &boundedBuffer{limit: maxStderr}
 	cmd := exec.Command(path, "-k", confPath, vm.cfg.Name)
-	cmd.Stderr = stderr
+
+	// stderrText is what reap passes to decodeExit once bhyve is gone.
+	// closeStderr releases anything held for it if bhyve never starts.
+	var stderrText func() string
+	closeStderr := func() {}
+	if vm.stderrPath != "" {
+		out, err := openStderrFile(vm.stderrPath)
+		if err != nil {
+			os.Remove(confPath)
+			return nil, nil, newError(op, vm.cfg.Name, err)
+		}
+		// bhyve gets its own descriptor at Start; this process's
+		// write copy is not needed past this function, whether or
+		// not Start succeeds.
+		defer out.w.Close()
+
+		// An *os.File, not a wrapper: os/exec then passes the
+		// descriptor itself rather than a pipe it has to drain.
+		cmd.Stderr = out.w
+		closeStderr = func() { out.r.Close() }
+		stderrText = func() string {
+			defer out.r.Close()
+			// Failing to read back is not worth failing the
+			// reap over; the exit status still says enough.
+			text, _ := readStderrTail(out.r, out.offset, maxStderr)
+			return text
+		}
+	} else {
+		stderr := &boundedBuffer{limit: maxStderr}
+		cmd.Stderr = stderr
+		stderrText = stderr.String
+	}
 
 	// Its own process group, so that a hard kill can reach anything
 	// bhyve started rather than only bhyve itself.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	if err := cmd.Start(); err != nil {
+		closeStderr()
 		os.Remove(confPath)
 		return nil, nil, newError(op, vm.cfg.Name, err)
 	}
@@ -293,7 +363,6 @@ func (vm *VM) launch() (running, done chan struct{}, err error) {
 
 	vm.cmd = cmd
 	vm.confPath = confPath
-	vm.stderr = stderr
 	vm.observed = false
 	vm.hasReason = false
 	vm.reason = ExitReason{}
@@ -302,7 +371,7 @@ func (vm *VM) launch() (running, done chan struct{}, err error) {
 	vm.done = done
 
 	go vm.watch(running, done)
-	go vm.reap(cmd, stderr, confPath, running, done)
+	go vm.reap(cmd, stderrText, confPath, running, done)
 
 	return running, done, nil
 }
@@ -366,9 +435,13 @@ func bootProcessorRunning(handle *vmm.VM) bool {
 }
 
 // reap waits for bhyve to finish and records why.
-func (vm *VM) reap(cmd *exec.Cmd, stderr *boundedBuffer, confPath string, running, done chan struct{}) {
+func (vm *VM) reap(cmd *exec.Cmd, stderrText func() string, confPath string, running, done chan struct{}) {
 	waitErr := cmd.Wait()
 	status, signal := exitStatus(waitErr)
+
+	// Read before taking the lock: with a file this is I/O, and
+	// nothing else should wait on it.
+	message := stderrText()
 
 	vm.mu.Lock()
 
@@ -383,7 +456,7 @@ func (vm *VM) reap(cmd *exec.Cmd, stderr *boundedBuffer, confPath string, runnin
 	// from an earlier run.
 	started := vm.observed || vmExists(vm.cfg.Name)
 
-	vm.reason = decodeExit(status, signal, started, stderr.String())
+	vm.reason = decodeExit(status, signal, started, message)
 	vm.hasReason = true
 	vm.state = StateExited
 	vm.mu.Unlock()
@@ -582,6 +655,9 @@ func destroyVM(name string) error {
 
 // boundedBuffer collects output up to a limit, keeping the beginning.
 //
+// It is the default pipe's collector. A WithStderrFile file is read
+// back by readStderrTail instead, which keeps the end.
+//
 // bhyve says why it is unhappy in its first line, so the start is the
 // part worth keeping; the limit is what stops a guest console wired to
 // stdio from growing without bound.
@@ -615,6 +691,125 @@ func (b *boundedBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return string(b.buf)
+}
+
+// stderrFile is a WithStderrFile file opened for one run.
+type stderrFile struct {
+	// w is handed to bhyve as its standard error.
+	w *os.File
+	// r reads back what bhyve wrote. It is the same inode as w, so
+	// the read follows the file through a rename.
+	r *os.File
+	// offset is the file's size before bhyve ran: this run's output
+	// starts there.
+	offset int64
+}
+
+// openStderrFile opens the file bhyve's standard error goes to, for
+// appending and for reading back.
+//
+// Both opens are non-blocking, so that a FIFO or a device at the path is
+// refused rather than waited on; Start holds the VM's lock while it runs.
+// The write descriptor is made blocking again before bhyve gets it.
+func openStderrFile(path string) (*stderrFile, error) {
+	w, err := openNonBlocking(path, syscall.O_WRONLY|syscall.O_CREAT|syscall.O_APPEND, 0o600)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("stderr file %s: directory %s does not exist: %w",
+				path, filepath.Dir(path), err)
+		}
+		return nil, fmt.Errorf("stderr file: %w", err)
+	}
+
+	wInfo, err := w.Stat()
+	if err != nil {
+		w.Close()
+		return nil, fmt.Errorf("stderr file: %w", err)
+	}
+	if !wInfo.Mode().IsRegular() {
+		w.Close()
+		return nil, fmt.Errorf("stderr file %s is not a regular file (%v)",
+			path, wInfo.Mode().Type())
+	}
+	if err := setBlocking(w); err != nil {
+		w.Close()
+		return nil, fmt.Errorf("stderr file: %w", err)
+	}
+
+	r, err := openNonBlocking(path, syscall.O_RDONLY, 0)
+	if err != nil {
+		w.Close()
+		return nil, fmt.Errorf("stderr file: %w", err)
+	}
+	rInfo, err := r.Stat()
+	if err != nil || !os.SameFile(wInfo, rInfo) {
+		w.Close()
+		r.Close()
+		if err == nil {
+			err = errors.New("replaced while being opened")
+		}
+		return nil, fmt.Errorf("stderr file %s: %w", path, err)
+	}
+
+	return &stderrFile{w: w, r: r, offset: wInfo.Size()}, nil
+}
+
+// openNonBlocking opens path with O_NONBLOCK and close-on-exec.
+//
+// It goes through syscall rather than os.OpenFile so that the
+// descriptor is a plain one, not registered with the runtime poller.
+func openNonBlocking(path string, flags int, mode uint32) (*os.File, error) {
+	fd, err := syscall.Open(path, flags|syscall.O_NONBLOCK|syscall.O_CLOEXEC, mode)
+	if err != nil {
+		return nil, &os.PathError{Op: "open", Path: path, Err: err}
+	}
+	return os.NewFile(uintptr(fd), path), nil
+}
+
+// setBlocking clears O_NONBLOCK, which is shared with whoever inherits
+// the descriptor.
+func setBlocking(f *os.File) error {
+	conn, err := f.SyscallConn()
+	if err != nil {
+		return err
+	}
+	var opErr error
+	if err := conn.Control(func(fd uintptr) {
+		opErr = syscall.SetNonblock(int(fd), false)
+	}); err != nil {
+		return err
+	}
+	return opErr
+}
+
+// readStderrTail returns what was written to file after offset, keeping
+// at most the last limit bytes.
+//
+// The end is kept rather than the beginning, unlike boundedBuffer: the
+// file may hold a long run's worth of warnings, and the reason bhyve
+// exited is the last thing it wrote. If the file is now shorter than
+// offset it was truncated by rotation, and everything in it is newer
+// than offset, so all of it counts.
+func readStderrTail(file *os.File, offset int64, limit int) (string, error) {
+	info, err := file.Stat()
+	if err != nil {
+		return "", err
+	}
+
+	size := info.Size()
+	if size < offset {
+		offset = 0
+	}
+	if size-offset > int64(limit) {
+		offset = size - int64(limit)
+	}
+
+	buf := make([]byte, size-offset)
+	n, err := file.ReadAt(buf, offset)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", err
+	}
+	return string(buf[:n]), nil
 }
 
 // DestroyByName removes a virtual machine from the kernel by name,

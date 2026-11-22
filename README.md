@@ -116,6 +116,17 @@ early boot, and for any guest that never enables it, SIGTERM keeps its default
 disposition and kills bhyve outright. The returned reason says which happened,
 and the difference matters to the guest's filesystems.
 
+A fourth follows from the first: bhyve can outlive the process that started
+it, and a supervisor that restarts without stopping its guests relies on that.
+By default bhyve's standard error is a pipe read by the caller, so once the
+caller exits, bhyve's next warning gets SIGPIPE and can take the guest with it.
+`WithStderrFile` gives bhyve a file instead, and keeps bhyve's own words in
+`ExitReason.Message`:
+
+```go
+vm, err := bhyve.New(cfg, bhyve.WithStderrFile("/var/log/bhyve/"+cfg.Name+".err"))
+```
+
 ## Configuration
 
 A typed `Config` renders to a `bhyve_config(5)` file, which bhyve reads with

@@ -8,6 +8,22 @@ The API may change until v1.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- `WithStderrFile(path)` sends bhyve's standard error to a file, opened for
+  appending with mode 0600, instead of to a pipe read by the calling
+  process. bhyve runs in its own process group and can outlive its caller,
+  but with the pipe its next write to standard error after the caller exits
+  gets SIGPIPE or EPIPE and can kill the guest; a supervisor that restarts
+  without taking its guests down needs the file. Error messages are
+  unchanged: what bhyve appended during the run (the last 8 KiB) still
+  becomes `ExitReason.Message`, read through a descriptor on the inode bhyve
+  writes to, so rotation by rename (newsyslog's default) or by copy and
+  truncate is safe. The directory must exist, the path must be a regular
+  file, and rotating it is the caller's job. Covered by `TestStderrFileOutlivesTheStarter`, which
+  makes bhyve write to its standard error after the process that started it
+  has exited.
+
 ## [1.0.3] - 2026-11-09
 
 FreeBSD 15 support, a `Start` that no longer reports success for a VM that
