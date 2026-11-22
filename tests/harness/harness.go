@@ -76,13 +76,14 @@ func Config(t *testing.T) bhyve.Config {
 }
 
 // RequireVM builds a VM from cfg and arranges for it to be destroyed
-// when the test ends.
-func RequireVM(t *testing.T, cfg bhyve.Config) *bhyve.VM {
+// when the test ends. Options are applied after the harness's own.
+func RequireVM(t *testing.T, cfg bhyve.Config, opts ...bhyve.Option) *bhyve.VM {
 	t.Helper()
 
 	RequireHost(t)
 
-	vm, err := bhyve.New(cfg, bhyve.WithDir(t.TempDir()))
+	opts = append([]bhyve.Option{bhyve.WithDir(t.TempDir())}, opts...)
+	vm, err := bhyve.New(cfg, opts...)
 	if err != nil {
 		t.Fatalf("harness: New(%q): %v", cfg.Name, err)
 	}

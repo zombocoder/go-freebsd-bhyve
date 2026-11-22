@@ -18,6 +18,12 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	// A child started by a test to play a short-lived starter. It must
+	// not sweep: that would destroy the parent's VMs, including the
+	// one it is about to leave running.
+	if os.Getenv(starterEnv) != "" {
+		os.Exit(runStarter())
+	}
 	os.Exit(harness.Run(m))
 }
 
